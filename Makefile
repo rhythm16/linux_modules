@@ -1,5 +1,6 @@
 obj-m += hello_world.o
 obj-m += chardev.o
+obj-m += rootkit.o
 
 PWD := $(CURDIR)
 
