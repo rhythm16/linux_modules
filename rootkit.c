@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/cdev.h>
+#include "rootkit.h"
 
 #define OURMODNAME	"rootkit"
 
@@ -12,10 +13,10 @@ static int major;
 static struct class *cls;
 static struct cdev *kernel_cdev;
 static dev_t dev_no, dev;
+static unsigned long val = 0xAAAA;
 
 static int rootkit_open(struct inode *inode, struct file *filp)
 {
-
 	printk(KERN_INFO "%s\n", __func__);
 	return 0;
 }
@@ -29,6 +30,22 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
 		unsigned long arg)
 {
 	printk(KERN_INFO "%s\n", __func__);
+
+	switch (ioctl) {
+	case ROOTKIT_GET_VAL:
+		if (copy_to_user((unsigned long * __user)arg, &val, sizeof(val))) {
+			printk(KERN_INFO "copy_to_user failed!\n");
+		}
+		printk(KERN_INFO "GET_VAL, %lx\n", val);
+		break;
+	case ROOTKIT_SET_VAL:
+		if (copy_from_user(&val, (unsigned long * __user)arg, sizeof(val))) {
+			printk(KERN_INFO "copy_from_user failed!\n");
+		}
+		printk(KERN_INFO "SET_VAL, %lx\n", val);
+		break;
+	}
+
 	return 0;
 }
 
